@@ -1,0 +1,679 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  SIT233 Cloud Computing Final Project - Application stack for a highly available
+  WordPress deployment. This stack imports the separate networking stack and
+  provisions the application layer: security groups, private S3 media bucket,
+  Multi-AZ RDS, read replica, Application Load Balancer, Launch Template,
+  Auto Scaling Group, and CPU-based scaling policies.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Project and imported network
+        Parameters:
+          - ProjectName
+          - NetworkStackName
+
+      - Label:
+          default: EC2, AMI and access
+        Parameters:
+          - AmiId
+          - KeyName
+          - InstanceType
+          - InstanceProfileName
+
+      - Label:
+          default: WordPress bootstrap
+        Parameters:
+          - WordPressSiteTitle
+          - WordPressAdminUser
+          - WordPressAdminPassword
+          - WordPressAdminEmail
+
+      - Label:
+          default: RDS database
+        Parameters:
+          - DBName
+          - DBUsername
+          - DBPassword
+          - DBInstanceClass
+          - DBAllocatedStorage
+          - DBEngineVersion
+
+      - Label:
+          default: S3 media storage
+        Parameters:
+          - MediaBucketName
+
+    ParameterLabels:
+      ProjectName:
+        default: Project name
+      NetworkStackName:
+        default: Existing networking stack name
+      AmiId:
+        default: Custom WordPress AMI ID
+      KeyName:
+        default: EC2 key pair
+      InstanceProfileName:
+        default: Learner Lab instance profile
+      MediaBucketName:
+        default: Private S3 media bucket name
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: WordPress-CFN
+    Description: Prefix used for CloudFormation-created resources.
+    AllowedPattern: "^[a-zA-Z][a-zA-Z0-9-]*$"
+    ConstraintDescription: Must start with a letter and contain only letters, numbers and hyphens.
+
+  NetworkStackName:
+    Type: String
+    Default: WordPress-CFN-Networking
+    Description: Name of the networking stack that exports the VPC and subnet IDs.
+
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Default: ami-07f60fb369cdbc889
+    Description: Custom WordPress AMI created from the manually configured AMI server.
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: vockey
+    Description: Existing Learner Lab key pair.
+
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+    Description: EC2 instance type for WordPress web servers.
+
+  InstanceProfileName:
+    Type: String
+    Default: LabInstanceProfile
+    Description: Existing AWS Academy Learner Lab instance profile used instead of creating a custom IAM role.
+
+  WordPressSiteTitle:
+    Type: String
+    Default: Lorenzo WordPress Cloud Project
+    Description: WordPress site title used during automatic database bootstrap.
+
+  WordPressAdminUser:
+    Type: String
+    Default: lorenzodarioben
+    Description: WordPress administrator username.
+
+  WordPressAdminPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: WordPress administrator password used only to initialise the CloudFormation WordPress database.
+
+  WordPressAdminEmail:
+    Type: String
+    Default: lorenzodarioben@gmail.com
+    Description: WordPress administrator email address.
+
+  DBName:
+    Type: String
+    Default: wordpressdb
+    Description: WordPress database name.
+    AllowedPattern: "^[a-zA-Z][a-zA-Z0-9]*$"
+
+  DBUsername:
+    Type: String
+    Default: admin
+    Description: RDS master username.
+    AllowedPattern: "^[a-zA-Z][a-zA-Z0-9]*$"
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: RDS master password.
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues:
+      - db.t3.micro
+      - db.t4g.micro
+    Description: RDS instance class available in the Learner Lab.
+
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 100
+    Description: RDS allocated storage in GiB.
+
+  DBEngineVersion:
+    Type: String
+    Default: "8.0.40"
+    Description: MySQL 8.0 engine version available in the current Learner Lab region.
+
+  MediaBucketName:
+    Type: String
+    Default: wordpress-cfn-media-lorenzo-224658462
+    Description: Globally unique S3 bucket name for WordPress media.
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Security groups
+  # ---------------------------------------------------------------------------
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${ProjectName}-ALB-SG"
+      GroupDescription: Allow public HTTP traffic to the Application Load Balancer.
+      VpcId:
+        Fn::ImportValue: !Sub "${NetworkStackName}-VpcId"
+      SecurityGroupIngress:
+        - Description: Public HTTP access to ALB
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - Description: Allow outbound traffic from ALB
+          IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-ALB-SG"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Layer
+          Value: Security
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${ProjectName}-Web-SG"
+      GroupDescription: Allow HTTP to WordPress web servers only from the ALB security group.
+      VpcId:
+        Fn::ImportValue: !Sub "${NetworkStackName}-VpcId"
+      SecurityGroupIngress:
+        - Description: HTTP only from ALB security group
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+      SecurityGroupEgress:
+        - Description: Allow outbound traffic for RDS, S3, SSM and package access through NAT
+          IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-Web-SG"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Layer
+          Value: Security
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${ProjectName}-RDS-SG"
+      GroupDescription: Allow MySQL access only from WordPress web servers.
+      VpcId:
+        Fn::ImportValue: !Sub "${NetworkStackName}-VpcId"
+      SecurityGroupIngress:
+        - Description: MySQL from WordPress web security group only
+          IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref WebSecurityGroup
+      SecurityGroupEgress:
+        - Description: Allow outbound traffic from RDS security group
+          IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-RDS-SG"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Layer
+          Value: Security
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # ---------------------------------------------------------------------------
+  # Private S3 media bucket
+  # ---------------------------------------------------------------------------
+
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref MediaBucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Suspended
+      Tags:
+        - Key: Name
+          Value: !Ref MediaBucketName
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Layer
+          Value: Storage
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  MediaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MediaBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !Sub "arn:aws:s3:::${MediaBucket}"
+              - !Sub "arn:aws:s3:::${MediaBucket}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  # ---------------------------------------------------------------------------
+  # RDS database tier
+  # ---------------------------------------------------------------------------
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnet group for WordPress RDS instances.
+      SubnetIds:
+        - Fn::ImportValue: !Sub "${NetworkStackName}-PrivateSubnet1Id"
+        - Fn::ImportValue: !Sub "${NetworkStackName}-PrivateSubnet2Id"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-DB-Subnet-Group"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Layer
+          Value: Database
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  WordPressDB:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DBInstanceIdentifier: wordpress-cfn-db
+      DBName: !Ref DBName
+      Engine: mysql
+      EngineVersion: !Ref DBEngineVersion
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      StorageType: gp3
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      MultiAZ: true
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 1
+      AutoMinorVersionUpgrade: true
+      DeletionProtection: false
+      CopyTagsToSnapshot: true
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-Primary-DB"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Layer
+          Value: Database
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  WordPressDBReadReplica:
+    Type: AWS::RDS::DBInstance
+    DependsOn: WordPressDB
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DBInstanceIdentifier: wordpress-cfn-db-read-replica
+      SourceDBInstanceIdentifier: !Ref WordPressDB
+      DBInstanceClass: !Ref DBInstanceClass
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      PubliclyAccessible: false
+      AutoMinorVersionUpgrade: true
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-Read-Replica"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Layer
+          Value: Database
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # ---------------------------------------------------------------------------
+  # Application Load Balancer
+  # ---------------------------------------------------------------------------
+
+  WordPressTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: WordPress-CFN-TG
+      Protocol: HTTP
+      Port: 80
+      TargetType: instance
+      VpcId:
+        Fn::ImportValue: !Sub "${NetworkStackName}-VpcId"
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: "200-399"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-TG"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Layer
+          Value: LoadBalancing
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  WordPressALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: WordPress-CFN-ALB
+      Scheme: internet-facing
+      Type: application
+      IpAddressType: ipv4
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Subnets:
+        - Fn::ImportValue: !Sub "${NetworkStackName}-PublicSubnet1Id"
+        - Fn::ImportValue: !Sub "${NetworkStackName}-PublicSubnet2Id"
+      LoadBalancerAttributes:
+        - Key: deletion_protection.enabled
+          Value: "false"
+        - Key: idle_timeout.timeout_seconds
+          Value: "60"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-ALB"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Layer
+          Value: LoadBalancing
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  WordPressALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref WordPressALB
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref WordPressTargetGroup
+
+  # ---------------------------------------------------------------------------
+  # Launch Template and Auto Scaling Group
+  # ---------------------------------------------------------------------------
+
+  WordPressLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: WordPress-CFN-LT
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        IamInstanceProfile:
+          Name: !Ref InstanceProfileName
+        MetadataOptions:
+          HttpEndpoint: enabled
+          HttpTokens: required
+        Monitoring:
+          Enabled: true
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: false
+            Groups:
+              - !Ref WebSecurityGroup
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: WordPress-CFN-ASG-Instance
+              - Key: Project
+                Value: !Ref ProjectName
+              - Key: Layer
+                Value: Application
+              - Key: ManagedBy
+                Value: CloudFormation
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -xe
+
+            CONFIG_FILE="/var/www/html/wp-config.php"
+            WEB_ROOT="/var/www/html"
+
+            dnf install -y php-gd wget curl || true
+
+            if ! command -v wp >/dev/null 2>&1; then
+              curl -L https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o /usr/local/bin/wp
+              chmod +x /usr/local/bin/wp
+            fi
+
+            if [ -f "$CONFIG_FILE" ]; then
+              sed -i "s/define( *'DB_NAME'.*/define( 'DB_NAME', '${DBName}' );/" "$CONFIG_FILE"
+              sed -i "s/define( *'DB_USER'.*/define( 'DB_USER', '${DBUsername}' );/" "$CONFIG_FILE"
+              sed -i "s/define( *'DB_PASSWORD'.*/define( 'DB_PASSWORD', '${DBPassword}' );/" "$CONFIG_FILE"
+              sed -i "s/define( *'DB_HOST'.*/define( 'DB_HOST', '${WordPressDB.Endpoint.Address}' );/" "$CONFIG_FILE"
+
+              if ! grep -q "WP_HOME" "$CONFIG_FILE"; then
+                sed -i "/\/\* That's all, stop editing! Happy publishing. \*\//i define( 'WP_HOME', 'http://' . \$_SERVER['HTTP_HOST'] );" "$CONFIG_FILE"
+              fi
+
+              if ! grep -q "WP_SITEURL" "$CONFIG_FILE"; then
+                sed -i "/\/\* That's all, stop editing! Happy publishing. \*\//i define( 'WP_SITEURL', 'http://' . \$_SERVER['HTTP_HOST'] );" "$CONFIG_FILE"
+              fi
+            fi
+
+            chown -R apache:apache "$WEB_ROOT"
+
+            for i in {1..30}; do
+              php -r '$m=@new mysqli("${WordPressDB.Endpoint.Address}","${DBUsername}","${DBPassword}","${DBName}",3306); exit($m->connect_errno ? 1 : 0);' && break
+              sleep 10
+            done
+
+            if ! sudo -u apache /usr/local/bin/wp core is-installed --path="$WEB_ROOT"; then
+              sudo -u apache /usr/local/bin/wp core install \
+                --path="$WEB_ROOT" \
+                --url="http://${WordPressALB.DNSName}" \
+                --title="${WordPressSiteTitle}" \
+                --admin_user="${WordPressAdminUser}" \
+                --admin_password="${WordPressAdminPassword}" \
+                --admin_email="${WordPressAdminEmail}"
+            fi
+
+            sudo -u apache /usr/local/bin/wp option update blog_public 0 --path="$WEB_ROOT" || true
+
+            if sudo -u apache /usr/local/bin/wp plugin is-installed amazon-s3-and-cloudfront --path="$WEB_ROOT"; then
+              sudo -u apache /usr/local/bin/wp plugin activate amazon-s3-and-cloudfront --path="$WEB_ROOT" || true
+            fi
+
+            systemctl enable php-fpm || true
+            systemctl enable httpd
+            systemctl restart php-fpm || true
+            systemctl restart httpd
+
+  WordPressAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+      - WordPressALBListener
+      - WordPressDB
+    Properties:
+      AutoScalingGroupName: WordPress-CFN-ASG
+      MinSize: "1"
+      MaxSize: "3"
+      DesiredCapacity: "1"
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 300
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub "${NetworkStackName}-PrivateSubnet1Id"
+        - Fn::ImportValue: !Sub "${NetworkStackName}-PrivateSubnet2Id"
+      TargetGroupARNs:
+        - !Ref WordPressTargetGroup
+      LaunchTemplate:
+        LaunchTemplateId: !Ref WordPressLaunchTemplate
+        Version: !GetAtt WordPressLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: WordPress-CFN-ASG-Instance
+          PropagateAtLaunch: true
+        - Key: Project
+          Value: !Ref ProjectName
+          PropagateAtLaunch: true
+        - Key: Layer
+          Value: Application
+          PropagateAtLaunch: true
+        - Key: ManagedBy
+          Value: CloudFormation
+          PropagateAtLaunch: true
+
+  # ---------------------------------------------------------------------------
+  # CPU-based simple scaling policies: exact 70% / 25% task requirement
+  # ---------------------------------------------------------------------------
+
+  HighCPUScaleOutPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref WordPressAutoScalingGroup
+      PolicyName: high-cpu-scale-cfn
+      PolicyType: SimpleScaling
+      AdjustmentType: ChangeInCapacity
+      ScalingAdjustment: 1
+      Cooldown: 300
+
+  LowCPUScaleInPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref WordPressAutoScalingGroup
+      PolicyName: low-cpu-scale-cfn
+      PolicyType: SimpleScaling
+      AdjustmentType: ChangeInCapacity
+      ScalingAdjustment: -1
+      Cooldown: 300
+
+  HighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-high-cpu-alarm"
+      AlarmDescription: Scale out WordPress ASG when average CPU is greater than or equal to 70 percent.
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref WordPressAutoScalingGroup
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 70
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref HighCPUScaleOutPolicy
+
+  LowCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-low-cpu-alarm"
+      AlarmDescription: Scale in WordPress ASG when average CPU is less than or equal to 25 percent.
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref WordPressAutoScalingGroup
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      Threshold: 25
+      ComparisonOperator: LessThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref LowCPUScaleInPolicy
+
+Outputs:
+  ApplicationURL:
+    Description: WordPress URL through the CloudFormation-created Application Load Balancer.
+    Value: !Sub "http://${WordPressALB.DNSName}"
+
+  LoadBalancerDNSName:
+    Description: DNS name of the CloudFormation-created Application Load Balancer.
+    Value: !GetAtt WordPressALB.DNSName
+
+  TargetGroupArn:
+    Description: Target group attached to the Auto Scaling Group.
+    Value: !Ref WordPressTargetGroup
+
+  LaunchTemplateId:
+    Description: Launch Template ID used by the Auto Scaling Group.
+    Value: !Ref WordPressLaunchTemplate
+
+  AutoScalingGroupName:
+    Description: Auto Scaling Group name.
+    Value: !Ref WordPressAutoScalingGroup
+
+  HighCPUAlarmName:
+    Description: CloudWatch alarm for scale-out at 70 percent CPU.
+    Value: !Ref HighCPUAlarm
+
+  LowCPUAlarmName:
+    Description: CloudWatch alarm for scale-in at 25 percent CPU.
+    Value: !Ref LowCPUAlarm
+
+  PrimaryDatabaseIdentifier:
+    Description: Primary Multi-AZ RDS DB instance identifier.
+    Value: !Ref WordPressDB
+
+  PrimaryDatabaseEndpoint:
+    Description: Primary RDS endpoint used by WordPress.
+    Value: !GetAtt WordPressDB.Endpoint.Address
+
+  ReadReplicaIdentifier:
+    Description: Read replica DB instance identifier.
+    Value: !Ref WordPressDBReadReplica
+
+  MediaBucketName:
+    Description: Private S3 bucket for WordPress media.
+    Value: !Ref MediaBucket

@@ -1,0 +1,23 @@
+# AWS credentials and keys
+*.pem
+*.key
+*.csv
+credentials
+config
+.aws/
+.env
+.env.*
+
+# Do not upload local command notes
+cloudformation create-stack
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.bak
+*.log
