@@ -1,0 +1,57 @@
+flowchart TB
+  Users["Users / Internet"]
+
+  subgraph AWS["AWS Region: us-east-1 expected by current defaults"]
+    subgraph VPC["CloudFormation VPC"]
+      IGW["Internet Gateway"]
+
+      subgraph PublicAZ1["Public subnet - AZ 1"]
+        ALB1["Application Load Balancer"]
+        NAT["NAT Gateway + Elastic IP"]
+      end
+
+      subgraph PublicAZ2["Public subnet - AZ 2"]
+        ALB2["Application Load Balancer"]
+      end
+
+      subgraph AppAZ1["Private application subnet - AZ 1"]
+        EC2A["EC2 Auto Scaling Group instance"]
+      end
+
+      subgraph AppAZ2["Private application subnet - AZ 2"]
+        EC2B["EC2 Auto Scaling Group capacity when selected"]
+      end
+
+      subgraph DBAZ1["Private database subnet - AZ 1"]
+        RDSPrimary["RDS MySQL primary"]
+      end
+
+      subgraph DBAZ2["Private database subnet - AZ 2"]
+        RDSStandby["AWS-managed Multi-AZ standby"]
+        RDSReplica["RDS MySQL read replica"]
+      end
+    end
+
+    Secrets["AWS Secrets Manager generated credentials"]
+    S3["Private S3 media bucket"]
+    CW["CloudWatch CPU alarms and ASG scaling policies"]
+  end
+
+  Users --> IGW
+  IGW --> ALB1
+  IGW --> ALB2
+  ALB1 --> EC2A
+  ALB2 --> EC2B
+  EC2A --> RDSPrimary
+  EC2B --> RDSPrimary
+  RDSPrimary -. "managed standby failover" .-> RDSStandby
+  RDSPrimary --> RDSReplica
+  EC2A --> Secrets
+  EC2B --> Secrets
+  EC2A --> S3
+  EC2B --> S3
+  EC2A --> NAT
+  EC2B --> NAT
+  NAT --> IGW
+  CW --> EC2A
+  CW --> EC2B
