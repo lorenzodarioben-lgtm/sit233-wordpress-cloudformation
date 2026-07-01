@@ -1,0 +1,5 @@
+templates:
+  - networking.yaml
+  - application.yaml
+regions:
+  - us-east-1
