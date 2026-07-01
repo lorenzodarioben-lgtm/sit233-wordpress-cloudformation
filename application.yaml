@@ -38,6 +38,7 @@ Metadata:
           - DBInstanceClass
           - DBAllocatedStorage
           - DBEngineVersion
+          - EnableRDSDeletionProtection
 
     ParameterLabels:
       ProjectName:
@@ -131,6 +132,16 @@ Parameters:
     Default: "8.0.40"
     Description: MySQL 8.0 engine version used by the original AWS Academy us-east-1 lab deployment.
 
+  EnableRDSDeletionProtection:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Set to true to block accidental primary database deletion. The default remains false for cost-conscious lab teardown.
+
+Conditions:
+  EnableRDSDeletionProtectionCondition: !Equals [!Ref EnableRDSDeletionProtection, "true"]
 
 Resources:
   # ---------------------------------------------------------------------------
@@ -329,8 +340,8 @@ Resources:
 
   WordPressDB:
     Type: AWS::RDS::DBInstance
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
     Properties:
       DBName: !Ref DBName
       Engine: mysql
@@ -338,13 +349,14 @@ Resources:
       DBInstanceClass: !Ref DBInstanceClass
       AllocatedStorage: !Ref DBAllocatedStorage
       StorageType: gp3
+      StorageEncrypted: true
       MasterUsername: !Sub "{{resolve:secretsmanager:${DatabaseCredentialsSecret}:SecretString:username}}"
       MasterUserPassword: !Sub "{{resolve:secretsmanager:${DatabaseCredentialsSecret}:SecretString:password}}"
       MultiAZ: true
       PubliclyAccessible: false
-      BackupRetentionPeriod: 1
+      BackupRetentionPeriod: 7
       AutoMinorVersionUpgrade: true
-      DeletionProtection: false
+      DeletionProtection: !If [EnableRDSDeletionProtectionCondition, true, false]
       CopyTagsToSnapshot: true
       DBSubnetGroupName: !Ref DBSubnetGroup
       VPCSecurityGroups:
@@ -361,6 +373,7 @@ Resources:
 
   WordPressDBReadReplica:
     Type: AWS::RDS::DBInstance
+    # The replica is disposable and can be recreated from the protected primary.
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
@@ -369,6 +382,7 @@ Resources:
       AvailabilityZone: !Select [1, !GetAZs ""]
       PubliclyAccessible: false
       AutoMinorVersionUpgrade: true
+      CopyTagsToSnapshot: true
       VPCSecurityGroups:
         - !Ref RDSSecurityGroup
       Tags:
