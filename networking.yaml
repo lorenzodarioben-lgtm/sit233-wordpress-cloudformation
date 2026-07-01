@@ -193,9 +193,6 @@ Resources:
 
   NatGateway:
     Type: AWS::EC2::NatGateway
-    DependsOn:
-      - NatGatewayEIP
-      - PublicSubnet1
     Properties:
       AllocationId: !GetAtt NatGatewayEIP.AllocationId
       SubnetId: !Ref PublicSubnet1
@@ -259,7 +256,6 @@ Resources:
 
   PrivateDefaultRoute:
     Type: AWS::EC2::Route
-    DependsOn: NatGateway
     Properties:
       RouteTableId: !Ref PrivateRouteTable
       DestinationCidrBlock: 0.0.0.0/0

@@ -42,24 +42,17 @@ Metadata:
           - DBAllocatedStorage
           - DBEngineVersion
 
-      - Label:
-          default: S3 media storage
-        Parameters:
-          - MediaBucketName
-
     ParameterLabels:
       ProjectName:
         default: Project name
       NetworkStackName:
         default: Existing networking stack name
       AmiId:
-        default: Custom WordPress AMI ID
+        default: AWS Academy custom WordPress AMI ID
       KeyName:
-        default: EC2 key pair
+        default: AWS Academy EC2 key pair
       InstanceProfileName:
-        default: Learner Lab instance profile
-      MediaBucketName:
-        default: Private S3 media bucket name
+        default: AWS Academy Learner Lab instance profile
 
 Parameters:
   ProjectName:
@@ -77,12 +70,12 @@ Parameters:
   AmiId:
     Type: AWS::EC2::Image::Id
     Default: ami-07f60fb369cdbc889
-    Description: Custom WordPress AMI created from the manually configured AMI server.
+    Description: AWS Academy us-east-1 lab-specific custom WordPress AMI created from the manually configured AMI server. Override outside the original lab environment.
 
   KeyName:
     Type: AWS::EC2::KeyPair::KeyName
     Default: vockey
-    Description: Existing Learner Lab key pair.
+    Description: AWS Academy Learner Lab key pair default. Override with an existing key pair outside the lab environment.
 
   InstanceType:
     Type: String
@@ -95,17 +88,18 @@ Parameters:
   InstanceProfileName:
     Type: String
     Default: LabInstanceProfile
-    Description: Existing AWS Academy Learner Lab instance profile used instead of creating a custom IAM role.
+    Description: Existing AWS Academy Learner Lab instance profile used instead of creating a custom IAM role. Override outside the lab environment.
 
   WordPressSiteTitle:
     Type: String
-    Default: Lorenzo WordPress Cloud Project
+    Default: WordPress CloudFormation Project
     Description: WordPress site title used during automatic database bootstrap.
 
   WordPressAdminUser:
     Type: String
-    Default: lorenzodarioben
     Description: WordPress administrator username.
+    AllowedPattern: "^[A-Za-z][A-Za-z0-9_-]{2,31}$"
+    ConstraintDescription: Must start with a letter and contain 3 to 32 letters, numbers, underscores, or hyphens.
 
   WordPressAdminPassword:
     Type: String
@@ -115,8 +109,9 @@ Parameters:
 
   WordPressAdminEmail:
     Type: String
-    Default: lorenzodarioben@gmail.com
     Description: WordPress administrator email address.
+    AllowedPattern: "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+    ConstraintDescription: Must be a valid email address.
 
   DBName:
     Type: String
@@ -142,7 +137,7 @@ Parameters:
     AllowedValues:
       - db.t3.micro
       - db.t4g.micro
-    Description: RDS instance class available in the Learner Lab.
+    Description: RDS instance class used by the original AWS Academy Learner Lab deployment.
 
   DBAllocatedStorage:
     Type: Number
@@ -154,12 +149,7 @@ Parameters:
   DBEngineVersion:
     Type: String
     Default: "8.0.40"
-    Description: MySQL 8.0 engine version available in the current Learner Lab region.
-
-  MediaBucketName:
-    Type: String
-    Default: wordpress-cfn-media-lorenzo-224658462
-    Description: Globally unique S3 bucket name for WordPress media.
+    Description: MySQL 8.0 engine version used by the original AWS Academy us-east-1 lab deployment.
 
 Resources:
   # ---------------------------------------------------------------------------
@@ -169,7 +159,6 @@ Resources:
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub "${ProjectName}-ALB-SG"
       GroupDescription: Allow public HTTP traffic to the Application Load Balancer.
       VpcId:
         Fn::ImportValue: !Sub "${NetworkStackName}-VpcId"
@@ -196,7 +185,6 @@ Resources:
   WebSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub "${ProjectName}-Web-SG"
       GroupDescription: Allow HTTP to WordPress web servers only from the ALB security group.
       VpcId:
         Fn::ImportValue: !Sub "${NetworkStackName}-VpcId"
@@ -223,7 +211,6 @@ Resources:
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub "${ProjectName}-RDS-SG"
       GroupDescription: Allow MySQL access only from WordPress web servers.
       VpcId:
         Fn::ImportValue: !Sub "${NetworkStackName}-VpcId"
@@ -254,7 +241,6 @@ Resources:
   MediaBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Ref MediaBucketName
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -271,7 +257,7 @@ Resources:
         Status: Suspended
       Tags:
         - Key: Name
-          Value: !Ref MediaBucketName
+          Value: !Sub "${ProjectName}-Media-Bucket"
         - Key: Project
           Value: !Ref ProjectName
         - Key: Layer
@@ -323,7 +309,6 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      DBInstanceIdentifier: wordpress-cfn-db
       DBName: !Ref DBName
       Engine: mysql
       EngineVersion: !Ref DBEngineVersion
@@ -353,11 +338,9 @@ Resources:
 
   WordPressDBReadReplica:
     Type: AWS::RDS::DBInstance
-    DependsOn: WordPressDB
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      DBInstanceIdentifier: wordpress-cfn-db-read-replica
       SourceDBInstanceIdentifier: !Ref WordPressDB
       DBInstanceClass: !Ref DBInstanceClass
       AvailabilityZone: !Select [1, !GetAZs ""]
@@ -382,7 +365,6 @@ Resources:
   WordPressTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: WordPress-CFN-TG
       Protocol: HTTP
       Port: 80
       TargetType: instance
@@ -410,7 +392,6 @@ Resources:
   WordPressALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      Name: WordPress-CFN-ALB
       Scheme: internet-facing
       Type: application
       IpAddressType: ipv4
@@ -451,7 +432,6 @@ Resources:
   WordPressLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
-      LaunchTemplateName: WordPress-CFN-LT
       LaunchTemplateData:
         ImageId: !Ref AmiId
         InstanceType: !Ref InstanceType
@@ -472,7 +452,7 @@ Resources:
           - ResourceType: instance
             Tags:
               - Key: Name
-                Value: WordPress-CFN-ASG-Instance
+                Value: !Sub "${ProjectName}-ASG-Instance"
               - Key: Project
                 Value: !Ref ProjectName
               - Key: Layer
@@ -543,7 +523,6 @@ Resources:
       - WordPressALBListener
       - WordPressDB
     Properties:
-      AutoScalingGroupName: WordPress-CFN-ASG
       MinSize: "1"
       MaxSize: "3"
       DesiredCapacity: "1"
@@ -559,7 +538,7 @@ Resources:
         Version: !GetAtt WordPressLaunchTemplate.LatestVersionNumber
       Tags:
         - Key: Name
-          Value: WordPress-CFN-ASG-Instance
+          Value: !Sub "${ProjectName}-ASG-Instance"
           PropagateAtLaunch: true
         - Key: Project
           Value: !Ref ProjectName
@@ -579,7 +558,6 @@ Resources:
     Type: AWS::AutoScaling::ScalingPolicy
     Properties:
       AutoScalingGroupName: !Ref WordPressAutoScalingGroup
-      PolicyName: high-cpu-scale-cfn
       PolicyType: SimpleScaling
       AdjustmentType: ChangeInCapacity
       ScalingAdjustment: 1
@@ -589,7 +567,6 @@ Resources:
     Type: AWS::AutoScaling::ScalingPolicy
     Properties:
       AutoScalingGroupName: !Ref WordPressAutoScalingGroup
-      PolicyName: low-cpu-scale-cfn
       PolicyType: SimpleScaling
       AdjustmentType: ChangeInCapacity
       ScalingAdjustment: -1
@@ -598,7 +575,6 @@ Resources:
   HighCPUAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub "${ProjectName}-high-cpu-alarm"
       AlarmDescription: Scale out WordPress ASG when average CPU is greater than or equal to 70 percent.
       Namespace: AWS/EC2
       MetricName: CPUUtilization
@@ -617,7 +593,6 @@ Resources:
   LowCPUAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub "${ProjectName}-low-cpu-alarm"
       AlarmDescription: Scale in WordPress ASG when average CPU is less than or equal to 25 percent.
       Namespace: AWS/EC2
       MetricName: CPUUtilization
