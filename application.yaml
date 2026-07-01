@@ -24,6 +24,13 @@ Metadata:
           - InstanceType
 
       - Label:
+          default: Web tier capacity
+        Parameters:
+          - WebMinSize
+          - WebDesiredCapacity
+          - WebMaxSize
+
+      - Label:
           default: WordPress bootstrap
         Parameters:
           - WordPressSiteTitle
@@ -49,6 +56,12 @@ Metadata:
         default: AWS Academy custom WordPress AMI ID
       KeyName:
         default: AWS Academy EC2 key pair
+      WebMinSize:
+        default: Minimum web instances
+      WebDesiredCapacity:
+        default: Desired web instances
+      WebMaxSize:
+        default: Maximum web instances
 
 Parameters:
   ProjectName:
@@ -80,6 +93,33 @@ Parameters:
       - t2.micro
       - t3.micro
     Description: EC2 instance type for WordPress web servers.
+
+  WebMinSize:
+    Type: String
+    Default: "1"
+    AllowedValues:
+      - "1"
+      - "2"
+      - "3"
+    Description: Minimum number of WordPress web instances. Default is cost-conscious for lab use.
+
+  WebDesiredCapacity:
+    Type: String
+    Default: "1"
+    AllowedValues:
+      - "1"
+      - "2"
+      - "3"
+    Description: Desired number of WordPress web instances. Set to 2 for a multi-instance web tier.
+
+  WebMaxSize:
+    Type: String
+    Default: "3"
+    AllowedValues:
+      - "1"
+      - "2"
+      - "3"
+    Description: Maximum number of WordPress web instances allowed by scaling policies.
 
   WordPressSiteTitle:
     Type: String
@@ -751,9 +791,9 @@ Resources:
       - WordPressALBListener
       - WordPressDB
     Properties:
-      MinSize: "1"
-      MaxSize: "3"
-      DesiredCapacity: "1"
+      MinSize: !Ref WebMinSize
+      MaxSize: !Ref WebMaxSize
+      DesiredCapacity: !Ref WebDesiredCapacity
       HealthCheckType: ELB
       HealthCheckGracePeriod: 300
       VPCZoneIdentifier:
