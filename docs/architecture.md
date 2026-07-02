@@ -2,65 +2,85 @@
 
 This project defines a two-Availability-Zone WordPress environment with separate CloudFormation stacks for networking and application resources. The architecture is HA-oriented and multi-AZ capable, but the default web tier remains cost-conscious with one desired EC2 instance.
 
+## Detailed Diagram
+
+The Mermaid source is also available in [diagrams/architecture.mmd](../diagrams/architecture.mmd).
+
 ```mermaid
 flowchart TB
-  Users["Users / Internet"]
+  Users["External users"]
+  Internet["Internet<br/>outside AWS account"]
 
-  subgraph AWS["AWS Region: us-east-1 expected by current defaults"]
-    subgraph VPC["CloudFormation VPC"]
-      IGW["Internet Gateway"]
+  subgraph AWS["AWS account / Region<br/>current defaults expect us-east-1"]
+    direction TB
 
-      subgraph PublicAZ1["Public subnet - AZ 1"]
-        ALB1["Application Load Balancer"]
-        NAT["NAT Gateway + Elastic IP"]
-      end
-
-      subgraph PublicAZ2["Public subnet - AZ 2"]
-        ALB2["Application Load Balancer"]
-      end
-
-      subgraph AppAZ1["Private application subnet - AZ 1"]
-        EC2A["EC2 Auto Scaling Group instance"]
-      end
-
-      subgraph AppAZ2["Private application subnet - AZ 2"]
-        EC2B["EC2 Auto Scaling Group capacity when selected"]
-      end
-
-      subgraph DBAZ1["Private database subnet - AZ 1"]
-        RDSPrimary["RDS MySQL primary"]
-      end
-
-      subgraph DBAZ2["Private database subnet - AZ 2"]
-        RDSStandby["AWS-managed Multi-AZ standby"]
-        RDSReplica["RDS MySQL read replica"]
-      end
+    subgraph Regional["Regional AWS services<br/>outside the VPC"]
+      direction LR
+      Secrets["Secrets Manager<br/>DB + WordPress admin secrets"]
+      S3["S3 media bucket<br/>private and encrypted"]
+      CloudWatch["CloudWatch CPU alarms"]
+      Scaling["Auto Scaling policies<br/>scale out / scale in"]
     end
 
-    Secrets["AWS Secrets Manager generated credentials"]
-    S3["Private S3 media bucket"]
-    CW["CloudWatch CPU alarms and ASG scaling policies"]
+    subgraph VPC["CloudFormation VPC"]
+      direction TB
+      IGW["Internet Gateway"]
+
+      subgraph PublicTier["Public tier<br/>public subnets in AZ 1 + AZ 2"]
+        direction LR
+        ALB["Application Load Balancer<br/>one logical ALB<br/>spans both public subnets"]
+        NAT["NAT Gateway + Elastic IP<br/>public subnet 1 only"]
+      end
+
+      subgraph AppTier["Private application tier<br/>private subnets in AZ 1 + AZ 2"]
+        direction LR
+        TargetGroup["ALB target group<br/>HTTP health checks"]
+        ASG["EC2 Auto Scaling Group<br/>spans both private app subnets<br/>min 1 / desired 1 / max 3"]
+        LaunchTemplate["Launch template<br/>private instances<br/>IMDSv2 required"]
+      end
+
+      subgraph DataTier["Private database tier<br/>DB subnet group across AZ 1 + AZ 2"]
+        direction LR
+        RDSPrimary["RDS MySQL primary<br/>Multi-AZ enabled<br/>WordPress endpoint"]
+        RDSStandby["AWS-managed Multi-AZ standby<br/>failover target only<br/>not readable by WordPress"]
+        RDSReplica["RDS read replica<br/>separate DB instance<br/>not used by WordPress"]
+      end
+    end
   end
 
-  Users --> IGW
-  IGW --> ALB1
-  IGW --> ALB2
-  ALB1 --> EC2A
-  ALB2 --> EC2B
-  EC2A --> RDSPrimary
-  EC2B --> RDSPrimary
+  Users -->|"request"| Internet
+  Internet -->|"HTTP :80"| IGW
+  IGW -->|"public ingress"| ALB
+  ALB -->|"forwards requests"| TargetGroup
+  TargetGroup -->|"HTTP :80 targets"| ASG
+  LaunchTemplate -. "launch configuration" .-> ASG
+  ASG -->|"MySQL :3306"| RDSPrimary
+
   RDSPrimary -. "managed standby failover" .-> RDSStandby
-  RDSPrimary --> RDSReplica
-  EC2A --> Secrets
-  EC2B --> Secrets
-  EC2A --> S3
-  EC2B --> S3
-  EC2A --> NAT
-  EC2B --> NAT
-  NAT --> IGW
-  CW --> EC2A
-  CW --> EC2B
+  RDSPrimary -. "asynchronous replication" .-> RDSReplica
+  ASG -. "runtime secret retrieval" .-> Secrets
+  ASG -->|"media access"| S3
+  CloudWatch -. "alarm actions" .-> Scaling
+  Scaling -. "scaling signals" .-> ASG
+  ASG -->|"outbound egress"| NAT
+  NAT -->|"internet egress via IGW"| Internet
+
+  style AWS fill:transparent,stroke:#888888,stroke-width:1px
+  style Regional fill:transparent,stroke:#888888,stroke-width:1px
+  style VPC fill:transparent,stroke:#888888,stroke-width:1px
+  style PublicTier fill:transparent,stroke:#888888,stroke-width:1px
+  style AppTier fill:transparent,stroke:#888888,stroke-width:1px
+  style DataTier fill:transparent,stroke:#888888,stroke-width:1px
 ```
+
+## Diagram Legend
+
+- Solid arrows show application or data traffic.
+- Dashed arrows show replication, monitoring, control, or management relationships.
+- External users and the internet are outside both the VPC and this repository's AWS account boundary.
+- Secrets Manager, S3, CloudWatch, and Auto Scaling policies are regional AWS services shown outside the VPC.
+
+The diagram shows one logical ALB spanning two public subnets and one logical Auto Scaling Group spanning two private application subnets. It does not duplicate those resources by Availability Zone.
 
 ## Networking Stack
 
@@ -100,9 +120,9 @@ Deploy the networking stack first. The application stack cannot resolve its impo
 
 ## Traffic Paths
 
-Internet traffic enters through the Internet Gateway and reaches the public Application Load Balancer. The ALB forwards HTTP traffic to EC2 instances in the private application subnets through the web security group.
+External users are intentionally shown outside the AWS account and VPC boundary. Internet traffic enters through the Internet Gateway and reaches the public Application Load Balancer. The ALB forwards HTTP traffic to EC2 instances in the private application subnets through the web security group.
 
-The EC2 instances use the NAT Gateway for outbound package downloads, AWS API calls, and other egress from private subnets. Because there is only one NAT Gateway, outbound access depends on the public subnet and Availability Zone that host that NAT Gateway.
+The EC2 instances use the NAT Gateway for outbound package downloads, AWS API calls, and other egress from private subnets. The NAT Gateway is in public subnet 1 with one Elastic IP and egresses through the Internet Gateway. Because there is only one NAT Gateway, outbound access depends on the public subnet and Availability Zone that host that NAT Gateway.
 
 WordPress connects to the RDS primary endpoint. The current bootstrap configures the primary database endpoint in `wp-config.php`; it does not configure WordPress to route application reads to the read replica.
 
