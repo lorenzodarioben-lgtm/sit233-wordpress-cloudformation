@@ -8,69 +8,38 @@ The Mermaid source is also available in [diagrams/architecture.mmd](../diagrams/
 
 ```mermaid
 flowchart TB
-  Users["External users"]
-  Internet["Internet<br/>outside AWS account"]
+  Users["External users<br/>outside AWS/VPC"]
+  Internet["Internet"]
+  IGW["Internet Gateway<br/>attached to VPC"]
+  ALB["Application Load Balancer<br/>HTTP only<br/>public subnets, 2 AZs"]
+  TargetGroup["Target group<br/>HTTP health checks"]
+  ASG["EC2 Auto Scaling Group<br/>private app subnets, 2 AZs<br/>min 1 / desired 1 / max 3"]
+  RDSPrimary["RDS MySQL primary<br/>Multi-AZ<br/>private DB subnets, 2 AZs"]
 
-  subgraph AWS["AWS account / Region<br/>current defaults expect us-east-1"]
-    direction TB
-
-    subgraph Regional["Regional AWS services<br/>outside the VPC"]
-      direction LR
-      Secrets["Secrets Manager<br/>DB + WordPress admin secrets"]
-      S3["S3 media bucket<br/>private and encrypted"]
-      CloudWatch["CloudWatch CPU alarms"]
-      Scaling["Auto Scaling policies<br/>scale out / scale in"]
-    end
-
-    subgraph VPC["CloudFormation VPC"]
-      direction TB
-      IGW["Internet Gateway"]
-
-      subgraph PublicTier["Public tier<br/>public subnets in AZ 1 + AZ 2"]
-        direction LR
-        ALB["Application Load Balancer<br/>one logical ALB<br/>spans both public subnets"]
-        NAT["NAT Gateway + Elastic IP<br/>public subnet 1 only"]
-      end
-
-      subgraph AppTier["Private application tier<br/>private subnets in AZ 1 + AZ 2"]
-        direction LR
-        TargetGroup["ALB target group<br/>HTTP health checks"]
-        ASG["EC2 Auto Scaling Group<br/>spans both private app subnets<br/>min 1 / desired 1 / max 3"]
-        LaunchTemplate["Launch template<br/>private instances<br/>IMDSv2 required"]
-      end
-
-      subgraph DataTier["Private database tier<br/>DB subnet group across AZ 1 + AZ 2"]
-        direction LR
-        RDSPrimary["RDS MySQL primary<br/>Multi-AZ enabled<br/>WordPress endpoint"]
-        RDSStandby["AWS-managed Multi-AZ standby<br/>failover target only<br/>not readable by WordPress"]
-        RDSReplica["RDS read replica<br/>separate DB instance<br/>not used by WordPress"]
-      end
-    end
-  end
+  NAT["NAT Gateway + EIP<br/>one public subnet"]
+  LaunchTemplate["Launch template<br/>private instances<br/>IMDSv2 required"]
+  Secrets["Secrets Manager<br/>regional, outside VPC"]
+  S3["S3 media bucket<br/>regional, outside VPC"]
+  CloudWatch["CloudWatch CPU alarms<br/>regional, outside VPC"]
+  Scaling["Auto Scaling policies"]
+  RDSStandby["AWS-managed standby<br/>failover only<br/>not readable by WordPress"]
+  RDSReplica["Read replica<br/>separate DB instance<br/>not used by WordPress"]
 
   Users -->|"request"| Internet
   Internet -->|"HTTP :80"| IGW
-  IGW -->|"public ingress"| ALB
-  ALB -->|"forwards requests"| TargetGroup
-  TargetGroup -->|"HTTP :80 targets"| ASG
-  LaunchTemplate -. "launch configuration" .-> ASG
+  IGW -->|"ingress"| ALB
+  ALB -->|"forward"| TargetGroup
+  TargetGroup -->|"targets"| ASG
   ASG -->|"MySQL :3306"| RDSPrimary
 
-  RDSPrimary -. "managed standby failover" .-> RDSStandby
-  RDSPrimary -. "asynchronous replication" .-> RDSReplica
-  ASG -. "runtime secret retrieval" .-> Secrets
-  ASG -->|"media access"| S3
-  CloudWatch -. "alarm actions" .-> Scaling
-  Scaling -. "scaling signals" .-> ASG
-  ASG -->|"outbound egress"| NAT
-  NAT -->|"internet egress via IGW"| Internet
-
-  style AWS fill:transparent,stroke:#888888,stroke-width:1px
-  style Regional fill:transparent,stroke:#888888,stroke-width:1px
-  style VPC fill:transparent,stroke:#888888,stroke-width:1px
-  style PublicTier fill:transparent,stroke:#888888,stroke-width:1px
-  style AppTier fill:transparent,stroke:#888888,stroke-width:1px
-  style DataTier fill:transparent,stroke:#888888,stroke-width:1px
+  LaunchTemplate -. "launch" .-> ASG
+  ASG -->|"egress"| NAT
+  ASG -. "secrets" .-> Secrets
+  ASG -->|"media"| S3
+  CloudWatch -. "alarm" .-> Scaling
+  Scaling -. "scale" .-> ASG
+  RDSPrimary -. "standby" .-> RDSStandby
+  RDSPrimary -. "replication" .-> RDSReplica
 ```
 
 ## Diagram Legend
@@ -80,7 +49,9 @@ flowchart TB
 - External users and the internet are outside both the VPC and this repository's AWS account boundary.
 - Secrets Manager, S3, CloudWatch, and Auto Scaling policies are regional AWS services shown outside the VPC.
 
-The diagram shows one logical ALB spanning two public subnets and one logical Auto Scaling Group spanning two private application subnets. It does not duplicate those resources by Availability Zone.
+Short edge labels keep the Mermaid render readable: `forward` means ALB forwarding to the target group, `targets` means target group traffic to EC2 instances, `secrets` means runtime retrieval from Secrets Manager, `media` means S3 media-bucket access, `scale` means CloudWatch-driven Auto Scaling signals, and `egress` means private-instance outbound access through the single NAT Gateway.
+
+The README diagram is intentionally simplified and avoids subnet boundary boxes so that it remains readable on GitHub. The detailed diagram also avoids nested boundary boxes because GitHub Mermaid gives those titles limited padding. Boundary facts are carried in the node labels: one logical ALB spans two public subnets, one logical Auto Scaling Group spans two private application subnets, RDS uses private database subnets, and regional services are labelled outside the VPC.
 
 ## Networking Stack
 
