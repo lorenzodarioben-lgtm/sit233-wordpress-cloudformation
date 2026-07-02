@@ -1,0 +1,70 @@
+[
+  {
+    "ParameterKey": "ProjectName",
+    "ParameterValue": "WordPress-CFN"
+  },
+  {
+    "ParameterKey": "NetworkStackName",
+    "ParameterValue": "WordPress-CFN-Networking"
+  },
+  {
+    "ParameterKey": "AmiId",
+    "ParameterValue": "ami-0123456789abcdef0"
+  },
+  {
+    "ParameterKey": "KeyName",
+    "ParameterValue": "example-key-pair"
+  },
+  {
+    "ParameterKey": "InstanceType",
+    "ParameterValue": "t3.micro"
+  },
+  {
+    "ParameterKey": "WebMinSize",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "WebDesiredCapacity",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "WebMaxSize",
+    "ParameterValue": "3"
+  },
+  {
+    "ParameterKey": "WordPressSiteTitle",
+    "ParameterValue": "WordPress CloudFormation Project"
+  },
+  {
+    "ParameterKey": "WordPressAdminUser",
+    "ParameterValue": "wpadmin"
+  },
+  {
+    "ParameterKey": "WordPressAdminEmail",
+    "ParameterValue": "admin@example.com"
+  },
+  {
+    "ParameterKey": "DBName",
+    "ParameterValue": "wordpressdb"
+  },
+  {
+    "ParameterKey": "DBUsername",
+    "ParameterValue": "admin"
+  },
+  {
+    "ParameterKey": "DBInstanceClass",
+    "ParameterValue": "db.t3.micro"
+  },
+  {
+    "ParameterKey": "DBAllocatedStorage",
+    "ParameterValue": "20"
+  },
+  {
+    "ParameterKey": "DBEngineVersion",
+    "ParameterValue": "8.0.40"
+  },
+  {
+    "ParameterKey": "EnableRDSDeletionProtection",
+    "ParameterValue": "false"
+  }
+]

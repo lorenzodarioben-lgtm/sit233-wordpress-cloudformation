@@ -22,14 +22,19 @@ Metadata:
           - AmiId
           - KeyName
           - InstanceType
-          - InstanceProfileName
+
+      - Label:
+          default: Web tier capacity
+        Parameters:
+          - WebMinSize
+          - WebDesiredCapacity
+          - WebMaxSize
 
       - Label:
           default: WordPress bootstrap
         Parameters:
           - WordPressSiteTitle
           - WordPressAdminUser
-          - WordPressAdminPassword
           - WordPressAdminEmail
 
       - Label:
@@ -37,15 +42,10 @@ Metadata:
         Parameters:
           - DBName
           - DBUsername
-          - DBPassword
           - DBInstanceClass
           - DBAllocatedStorage
           - DBEngineVersion
-
-      - Label:
-          default: S3 media storage
-        Parameters:
-          - MediaBucketName
+          - EnableRDSDeletionProtection
 
     ParameterLabels:
       ProjectName:
@@ -53,13 +53,15 @@ Metadata:
       NetworkStackName:
         default: Existing networking stack name
       AmiId:
-        default: Custom WordPress AMI ID
+        default: AWS Academy custom WordPress AMI ID
       KeyName:
-        default: EC2 key pair
-      InstanceProfileName:
-        default: Learner Lab instance profile
-      MediaBucketName:
-        default: Private S3 media bucket name
+        default: AWS Academy EC2 key pair
+      WebMinSize:
+        default: Minimum web instances
+      WebDesiredCapacity:
+        default: Desired web instances
+      WebMaxSize:
+        default: Maximum web instances
 
 Parameters:
   ProjectName:
@@ -77,12 +79,12 @@ Parameters:
   AmiId:
     Type: AWS::EC2::Image::Id
     Default: ami-07f60fb369cdbc889
-    Description: Custom WordPress AMI created from the manually configured AMI server.
+    Description: AWS Academy us-east-1 lab-specific custom WordPress AMI created from the manually configured AMI server. Override outside the original lab environment.
 
   KeyName:
     Type: AWS::EC2::KeyPair::KeyName
     Default: vockey
-    Description: Existing Learner Lab key pair.
+    Description: AWS Academy Learner Lab key pair default. Override with an existing key pair outside the lab environment.
 
   InstanceType:
     Type: String
@@ -92,31 +94,51 @@ Parameters:
       - t3.micro
     Description: EC2 instance type for WordPress web servers.
 
-  InstanceProfileName:
+  WebMinSize:
     Type: String
-    Default: LabInstanceProfile
-    Description: Existing AWS Academy Learner Lab instance profile used instead of creating a custom IAM role.
+    Default: "1"
+    AllowedValues:
+      - "1"
+      - "2"
+      - "3"
+    Description: Minimum number of WordPress web instances. Default is cost-conscious for lab use.
+
+  WebDesiredCapacity:
+    Type: String
+    Default: "1"
+    AllowedValues:
+      - "1"
+      - "2"
+      - "3"
+    Description: Desired number of WordPress web instances. Set to 2 for a multi-instance web tier.
+
+  WebMaxSize:
+    Type: String
+    Default: "3"
+    AllowedValues:
+      - "1"
+      - "2"
+      - "3"
+    Description: Maximum number of WordPress web instances allowed by scaling policies.
 
   WordPressSiteTitle:
     Type: String
-    Default: Lorenzo WordPress Cloud Project
+    Default: WordPress CloudFormation Project
     Description: WordPress site title used during automatic database bootstrap.
+    AllowedPattern: "^[A-Za-z0-9][A-Za-z0-9 _.,:()'/-]{0,127}$"
+    ConstraintDescription: Must contain 1 to 128 characters using letters, numbers, spaces, and common title punctuation.
 
   WordPressAdminUser:
     Type: String
-    Default: lorenzodarioben
     Description: WordPress administrator username.
-
-  WordPressAdminPassword:
-    Type: String
-    NoEcho: true
-    MinLength: 8
-    Description: WordPress administrator password used only to initialise the CloudFormation WordPress database.
+    AllowedPattern: "^[A-Za-z][A-Za-z0-9_-]{2,31}$"
+    ConstraintDescription: Must start with a letter and contain 3 to 32 letters, numbers, underscores, or hyphens.
 
   WordPressAdminEmail:
     Type: String
-    Default: lorenzodarioben@gmail.com
     Description: WordPress administrator email address.
+    AllowedPattern: "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"
+    ConstraintDescription: Must be a valid email address.
 
   DBName:
     Type: String
@@ -130,19 +152,13 @@ Parameters:
     Description: RDS master username.
     AllowedPattern: "^[a-zA-Z][a-zA-Z0-9]*$"
 
-  DBPassword:
-    Type: String
-    NoEcho: true
-    MinLength: 8
-    Description: RDS master password.
-
   DBInstanceClass:
     Type: String
     Default: db.t3.micro
     AllowedValues:
       - db.t3.micro
       - db.t4g.micro
-    Description: RDS instance class available in the Learner Lab.
+    Description: RDS instance class used by the original AWS Academy Learner Lab deployment.
 
   DBAllocatedStorage:
     Type: Number
@@ -154,12 +170,18 @@ Parameters:
   DBEngineVersion:
     Type: String
     Default: "8.0.40"
-    Description: MySQL 8.0 engine version available in the current Learner Lab region.
+    Description: MySQL 8.0 engine version used by the original AWS Academy us-east-1 lab deployment.
 
-  MediaBucketName:
+  EnableRDSDeletionProtection:
     Type: String
-    Default: wordpress-cfn-media-lorenzo-224658462
-    Description: Globally unique S3 bucket name for WordPress media.
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Set to true to block accidental primary database deletion. The default remains false for cost-conscious lab teardown.
+
+Conditions:
+  EnableRDSDeletionProtectionCondition: !Equals [!Ref EnableRDSDeletionProtection, "true"]
 
 Resources:
   # ---------------------------------------------------------------------------
@@ -169,7 +191,6 @@ Resources:
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub "${ProjectName}-ALB-SG"
       GroupDescription: Allow public HTTP traffic to the Application Load Balancer.
       VpcId:
         Fn::ImportValue: !Sub "${NetworkStackName}-VpcId"
@@ -196,7 +217,6 @@ Resources:
   WebSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub "${ProjectName}-Web-SG"
       GroupDescription: Allow HTTP to WordPress web servers only from the ALB security group.
       VpcId:
         Fn::ImportValue: !Sub "${NetworkStackName}-VpcId"
@@ -223,7 +243,6 @@ Resources:
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub "${ProjectName}-RDS-SG"
       GroupDescription: Allow MySQL access only from WordPress web servers.
       VpcId:
         Fn::ImportValue: !Sub "${NetworkStackName}-VpcId"
@@ -254,7 +273,6 @@ Resources:
   MediaBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Ref MediaBucketName
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -271,7 +289,7 @@ Resources:
         Status: Suspended
       Tags:
         - Key: Name
-          Value: !Ref MediaBucketName
+          Value: !Sub "${ProjectName}-Media-Bucket"
         - Key: Project
           Value: !Ref ProjectName
         - Key: Layer
@@ -298,6 +316,48 @@ Resources:
                 aws:SecureTransport: false
 
   # ---------------------------------------------------------------------------
+  # Generated bootstrap secrets
+  # ---------------------------------------------------------------------------
+
+  DatabaseCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Generated database credentials for the WordPress RDS primary.
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username":"${DBUsername}"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: '"@/'
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-DB-Credentials"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Layer
+          Value: Security
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  WordPressAdminCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Generated WordPress administrator password used during initial bootstrap.
+      GenerateSecretString:
+        SecretStringTemplate: "{}"
+        GenerateStringKey: password
+        PasswordLength: 24
+        ExcludeCharacters: '"@/'
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-WP-Admin-Credentials"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Layer
+          Value: Security
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # ---------------------------------------------------------------------------
   # RDS database tier
   # ---------------------------------------------------------------------------
 
@@ -320,23 +380,23 @@ Resources:
 
   WordPressDB:
     Type: AWS::RDS::DBInstance
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
     Properties:
-      DBInstanceIdentifier: wordpress-cfn-db
       DBName: !Ref DBName
       Engine: mysql
       EngineVersion: !Ref DBEngineVersion
       DBInstanceClass: !Ref DBInstanceClass
       AllocatedStorage: !Ref DBAllocatedStorage
       StorageType: gp3
-      MasterUsername: !Ref DBUsername
-      MasterUserPassword: !Ref DBPassword
+      StorageEncrypted: true
+      MasterUsername: !Sub "{{resolve:secretsmanager:${DatabaseCredentialsSecret}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DatabaseCredentialsSecret}:SecretString:password}}"
       MultiAZ: true
       PubliclyAccessible: false
-      BackupRetentionPeriod: 1
+      BackupRetentionPeriod: 7
       AutoMinorVersionUpgrade: true
-      DeletionProtection: false
+      DeletionProtection: !If [EnableRDSDeletionProtectionCondition, true, false]
       CopyTagsToSnapshot: true
       DBSubnetGroupName: !Ref DBSubnetGroup
       VPCSecurityGroups:
@@ -353,16 +413,16 @@ Resources:
 
   WordPressDBReadReplica:
     Type: AWS::RDS::DBInstance
-    DependsOn: WordPressDB
+    # The replica is disposable and can be recreated from the protected primary.
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      DBInstanceIdentifier: wordpress-cfn-db-read-replica
       SourceDBInstanceIdentifier: !Ref WordPressDB
       DBInstanceClass: !Ref DBInstanceClass
       AvailabilityZone: !Select [1, !GetAZs ""]
       PubliclyAccessible: false
       AutoMinorVersionUpgrade: true
+      CopyTagsToSnapshot: true
       VPCSecurityGroups:
         - !Ref RDSSecurityGroup
       Tags:
@@ -382,7 +442,6 @@ Resources:
   WordPressTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: WordPress-CFN-TG
       Protocol: HTTP
       Port: 80
       TargetType: instance
@@ -410,7 +469,6 @@ Resources:
   WordPressALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
-      Name: WordPress-CFN-ALB
       Scheme: internet-facing
       Type: application
       IpAddressType: ipv4
@@ -445,19 +503,63 @@ Resources:
           TargetGroupArn: !Ref WordPressTargetGroup
 
   # ---------------------------------------------------------------------------
+  # EC2 instance identity
+  # ---------------------------------------------------------------------------
+
+  # The original AWS Academy deployment used an externally provided learner-lab
+  # instance profile. This portfolio template defines the role it needs so
+  # secret access is explicit; restricted learner labs may need different IAM.
+  WordPressInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ReadWordPressBootstrapSecrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DatabaseCredentialsSecret
+                  - !Ref WordPressAdminCredentialsSecret
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-Instance-Role"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Layer
+          Value: Security
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  WordPressInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref WordPressInstanceRole
+
+  # ---------------------------------------------------------------------------
   # Launch Template and Auto Scaling Group
   # ---------------------------------------------------------------------------
 
   WordPressLaunchTemplate:
     Type: AWS::EC2::LaunchTemplate
     Properties:
-      LaunchTemplateName: WordPress-CFN-LT
       LaunchTemplateData:
         ImageId: !Ref AmiId
         InstanceType: !Ref InstanceType
         KeyName: !Ref KeyName
         IamInstanceProfile:
-          Name: !Ref InstanceProfileName
+          Name: !Ref WordPressInstanceProfile
         MetadataOptions:
           HttpEndpoint: enabled
           HttpTokens: required
@@ -472,7 +574,7 @@ Resources:
           - ResourceType: instance
             Tags:
               - Key: Name
-                Value: WordPress-CFN-ASG-Instance
+                Value: !Sub "${ProjectName}-ASG-Instance"
               - Key: Project
                 Value: !Ref ProjectName
               - Key: Layer
@@ -482,48 +584,194 @@ Resources:
         UserData:
           Fn::Base64: !Sub |
             #!/bin/bash
-            set -xe
+            set -Eeuo pipefail
 
             CONFIG_FILE="/var/www/html/wp-config.php"
             WEB_ROOT="/var/www/html"
+            AWS_REGION="${AWS::Region}"
+            DB_SECRET_ID="${DatabaseCredentialsSecret}"
+            WP_ADMIN_SECRET_ID="${WordPressAdminCredentialsSecret}"
+            DB_HOST="${WordPressDB.Endpoint.Address}"
+            DB_NAME="${DBName}"
+            WP_URL="http://${WordPressALB.DNSName}"
+            WP_SITE_TITLE="${WordPressSiteTitle}"
+            WP_ADMIN_USER="${WordPressAdminUser}"
+            WP_ADMIN_EMAIL="${WordPressAdminEmail}"
+            TMP_DIR=""
+            PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+            export PATH
 
-            dnf install -y php-gd wget curl || true
+            log() {
+              echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"
+            }
 
-            if ! command -v wp >/dev/null 2>&1; then
-              curl -L https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o /usr/local/bin/wp
-              chmod +x /usr/local/bin/wp
+            fail() {
+              echo "ERROR: $*" >&2
+              exit 1
+            }
+
+            cleanup() {
+              unset DB_PASSWORD DB_USERNAME
+              if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
+                rm -rf "$TMP_DIR"
+              fi
+            }
+
+            require_command() {
+              command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
+            }
+
+            get_secret() {
+              local secret_id="$1"
+              local output_file="$2"
+
+              log "Retrieving bootstrap secret."
+              aws secretsmanager get-secret-value \
+                --region "$AWS_REGION" \
+                --secret-id "$secret_id" \
+                --query SecretString \
+                --output text > "$output_file" || fail "Failed to retrieve required bootstrap secret."
+              chmod 600 "$output_file"
+            }
+
+            read_json_key() {
+              local file_path="$1"
+              local key="$2"
+
+              python3 - "$file_path" "$key" <<'PY'
+            import json
+            import sys
+
+            file_path, key = sys.argv[1], sys.argv[2]
+            with open(file_path, encoding="utf-8") as handle:
+                value = json.load(handle).get(key)
+
+            if not isinstance(value, str) or not value:
+                raise SystemExit("Missing required secret field: " + key)
+
+            print(value)
+            PY
+            }
+
+            trap cleanup EXIT
+
+            log "Installing required packages."
+            dnf install -y php-gd wget curl python3
+
+            if ! command -v aws >/dev/null 2>&1; then
+              log "Installing AWS CLI."
+              if ! dnf install -y awscli; then
+                dnf install -y awscli2 || fail "Unable to install AWS CLI from available package repositories."
+              fi
             fi
 
+            require_command aws
+            require_command curl
+            require_command php
+            require_command python3
+            require_command sudo
+
+            if ! command -v wp >/dev/null 2>&1; then
+              log "Installing WP-CLI."
+              curl --fail --location --silent --show-error https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o /usr/local/bin/wp
+              chmod 755 /usr/local/bin/wp
+            fi
+
+            require_command wp
+
+            TMP_DIR="$(mktemp -d)"
+            chmod 700 "$TMP_DIR"
+            DB_SECRET_FILE="$TMP_DIR/db-secret.json"
+            WP_ADMIN_SECRET_FILE="$TMP_DIR/wp-admin-secret.json"
+            WP_ADMIN_PASSWORD_FILE="$TMP_DIR/wp-admin-password"
+
+            get_secret "$DB_SECRET_ID" "$DB_SECRET_FILE"
+            get_secret "$WP_ADMIN_SECRET_ID" "$WP_ADMIN_SECRET_FILE"
+
+            DB_USERNAME="$(read_json_key "$DB_SECRET_FILE" "username")"
+            DB_PASSWORD="$(read_json_key "$DB_SECRET_FILE" "password")"
+            read_json_key "$WP_ADMIN_SECRET_FILE" "password" > "$WP_ADMIN_PASSWORD_FILE"
+            chmod 600 "$WP_ADMIN_PASSWORD_FILE"
+
             if [ -f "$CONFIG_FILE" ]; then
-              sed -i "s/define( *'DB_NAME'.*/define( 'DB_NAME', '${DBName}' );/" "$CONFIG_FILE"
-              sed -i "s/define( *'DB_USER'.*/define( 'DB_USER', '${DBUsername}' );/" "$CONFIG_FILE"
-              sed -i "s/define( *'DB_PASSWORD'.*/define( 'DB_PASSWORD', '${DBPassword}' );/" "$CONFIG_FILE"
-              sed -i "s/define( *'DB_HOST'.*/define( 'DB_HOST', '${WordPressDB.Endpoint.Address}' );/" "$CONFIG_FILE"
+              export CONFIG_FILE DB_HOST DB_NAME DB_PASSWORD DB_USERNAME
+              python3 <<'PY'
+            import os
+            import pathlib
+            import re
 
-              if ! grep -q "WP_HOME" "$CONFIG_FILE"; then
-                sed -i "/\/\* That's all, stop editing! Happy publishing. \*\//i define( 'WP_HOME', 'http://' . \$_SERVER['HTTP_HOST'] );" "$CONFIG_FILE"
-              fi
+            config_path = pathlib.Path(os.environ["CONFIG_FILE"])
+            text = config_path.read_text(encoding="utf-8")
 
-              if ! grep -q "WP_SITEURL" "$CONFIG_FILE"; then
-                sed -i "/\/\* That's all, stop editing! Happy publishing. \*\//i define( 'WP_SITEURL', 'http://' . \$_SERVER['HTTP_HOST'] );" "$CONFIG_FILE"
-              fi
+            def php_quote(value):
+                return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+            replacements = {
+                "DB_NAME": os.environ["DB_NAME"],
+                "DB_USER": os.environ["DB_USERNAME"],
+                "DB_PASSWORD": os.environ["DB_PASSWORD"],
+                "DB_HOST": os.environ["DB_HOST"],
+            }
+
+            for name, value in replacements.items():
+                pattern = re.compile(r"define\(\s*'" + re.escape(name) + r"'\s*,\s*.*?\);")
+                replacement = "define( '" + name + "', " + php_quote(value) + " );"
+                text, count = pattern.subn(replacement, text, count=1)
+                if count == 0:
+                    raise SystemExit("Missing wp-config.php constant: " + name)
+
+            marker = "/* That's all, stop editing! Happy publishing. */"
+            additions = []
+            if not re.search(r"define\(\s*'WP_HOME'", text):
+                additions.append("define( 'WP_HOME', 'http://' . $_SERVER['HTTP_HOST'] );")
+            if not re.search(r"define\(\s*'WP_SITEURL'", text):
+                additions.append("define( 'WP_SITEURL', 'http://' . $_SERVER['HTTP_HOST'] );")
+
+            if additions:
+                insertion = "\n".join(additions) + "\n\n"
+                if marker in text:
+                    text = text.replace(marker, insertion + marker, 1)
+                else:
+                    text = text.rstrip() + "\n\n" + insertion
+
+            config_path.write_text(text, encoding="utf-8")
+            PY
+              chmod 640 "$CONFIG_FILE"
+            else
+              fail "WordPress configuration file not found at $CONFIG_FILE."
             fi
 
             chown -R apache:apache "$WEB_ROOT"
 
-            for i in {1..30}; do
-              php -r '$m=@new mysqli("${WordPressDB.Endpoint.Address}","${DBUsername}","${DBPassword}","${DBName}",3306); exit($m->connect_errno ? 1 : 0);' && break
+            export DB_HOST DB_NAME DB_PASSWORD DB_USERNAME
+            log "Waiting for database connectivity."
+            db_ready=0
+            for attempt in $(seq 1 30); do
+              if php <<'PHP'
+            <?php
+            $connection = @new mysqli(getenv('DB_HOST'), getenv('DB_USERNAME'), getenv('DB_PASSWORD'), getenv('DB_NAME'), 3306);
+            exit($connection->connect_errno ? 1 : 0);
+            PHP
+              then
+                db_ready=1
+                break
+              fi
               sleep 10
             done
 
+            if [ "$db_ready" -ne 1 ]; then
+              fail "Timed out waiting for database connectivity."
+            fi
+
             if ! sudo -u apache /usr/local/bin/wp core is-installed --path="$WEB_ROOT"; then
+              log "Installing WordPress core."
               sudo -u apache /usr/local/bin/wp core install \
                 --path="$WEB_ROOT" \
-                --url="http://${WordPressALB.DNSName}" \
-                --title="${WordPressSiteTitle}" \
-                --admin_user="${WordPressAdminUser}" \
-                --admin_password="${WordPressAdminPassword}" \
-                --admin_email="${WordPressAdminEmail}"
+                --url="$WP_URL" \
+                --title="$WP_SITE_TITLE" \
+                --admin_user="$WP_ADMIN_USER" \
+                --admin_email="$WP_ADMIN_EMAIL" \
+                --prompt=admin_password < "$WP_ADMIN_PASSWORD_FILE"
             fi
 
             sudo -u apache /usr/local/bin/wp option update blog_public 0 --path="$WEB_ROOT" || true
@@ -543,10 +791,9 @@ Resources:
       - WordPressALBListener
       - WordPressDB
     Properties:
-      AutoScalingGroupName: WordPress-CFN-ASG
-      MinSize: "1"
-      MaxSize: "3"
-      DesiredCapacity: "1"
+      MinSize: !Ref WebMinSize
+      MaxSize: !Ref WebMaxSize
+      DesiredCapacity: !Ref WebDesiredCapacity
       HealthCheckType: ELB
       HealthCheckGracePeriod: 300
       VPCZoneIdentifier:
@@ -559,7 +806,7 @@ Resources:
         Version: !GetAtt WordPressLaunchTemplate.LatestVersionNumber
       Tags:
         - Key: Name
-          Value: WordPress-CFN-ASG-Instance
+          Value: !Sub "${ProjectName}-ASG-Instance"
           PropagateAtLaunch: true
         - Key: Project
           Value: !Ref ProjectName
@@ -579,7 +826,6 @@ Resources:
     Type: AWS::AutoScaling::ScalingPolicy
     Properties:
       AutoScalingGroupName: !Ref WordPressAutoScalingGroup
-      PolicyName: high-cpu-scale-cfn
       PolicyType: SimpleScaling
       AdjustmentType: ChangeInCapacity
       ScalingAdjustment: 1
@@ -589,7 +835,6 @@ Resources:
     Type: AWS::AutoScaling::ScalingPolicy
     Properties:
       AutoScalingGroupName: !Ref WordPressAutoScalingGroup
-      PolicyName: low-cpu-scale-cfn
       PolicyType: SimpleScaling
       AdjustmentType: ChangeInCapacity
       ScalingAdjustment: -1
@@ -598,7 +843,6 @@ Resources:
   HighCPUAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub "${ProjectName}-high-cpu-alarm"
       AlarmDescription: Scale out WordPress ASG when average CPU is greater than or equal to 70 percent.
       Namespace: AWS/EC2
       MetricName: CPUUtilization
@@ -617,7 +861,6 @@ Resources:
   LowCPUAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub "${ProjectName}-low-cpu-alarm"
       AlarmDescription: Scale in WordPress ASG when average CPU is less than or equal to 25 percent.
       Namespace: AWS/EC2
       MetricName: CPUUtilization
