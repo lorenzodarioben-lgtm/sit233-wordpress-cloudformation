@@ -506,8 +506,8 @@ Resources:
   # EC2 instance identity
   # ---------------------------------------------------------------------------
 
-  # The original AWS Academy deployment used the externally provided
-  # LabInstanceProfile. This portfolio template defines the role it needs so
+  # The original AWS Academy deployment used an externally provided learner-lab
+  # instance profile. This portfolio template defines the role it needs so
   # secret access is explicit; restricted learner labs may need different IAM.
   WordPressInstanceRole:
     Type: AWS::IAM::Role
