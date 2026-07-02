@@ -21,62 +21,30 @@ The repository began as a university cloud-computing final project and has been 
 
 ```mermaid
 flowchart TB
-  Users["External users"]
-  Internet["Internet<br/>outside AWS account"]
+  Users["External users<br/>outside AWS/VPC"]
+  Internet["Internet"]
+  ALB["Application Load Balancer<br/>HTTP only<br/>public subnets, 2 AZs"]
+  ASG["EC2 Auto Scaling Group<br/>min 1 / desired 1 / max 3<br/>private app subnets, 2 AZs"]
+  RDSPrimary["RDS MySQL primary<br/>Multi-AZ<br/>private DB subnets, 2 AZs"]
 
-  subgraph AWS["AWS account / Region<br/>us-east-1 defaults"]
-    direction TB
-
-    subgraph Regional["Regional AWS services<br/>outside the VPC"]
-      direction LR
-      Secrets["Secrets Manager<br/>generated credentials"]
-      S3["S3 media bucket<br/>private + encrypted"]
-      CloudWatch["CloudWatch alarms<br/>ASG scaling"]
-    end
-
-    subgraph VPC["CloudFormation VPC"]
-      direction TB
-      IGW["Internet Gateway"]
-
-      subgraph Public["Public tier<br/>2 public subnets"]
-        direction LR
-        ALB["Application Load Balancer<br/>one logical ALB"]
-        NAT["NAT Gateway + EIP<br/>public subnet 1 only"]
-      end
-
-      subgraph App["Private app tier<br/>2 private subnets"]
-        ASG["EC2 Auto Scaling Group<br/>min 1 / desired 1 / max 3"]
-      end
-
-      subgraph Data["Private database tier<br/>DB subnet group"]
-        direction LR
-        RDSPrimary["RDS MySQL primary<br/>Multi-AZ enabled"]
-        RDSStandby["AWS-managed standby<br/>not a read target"]
-        RDSReplica["RDS read replica<br/>not used by WordPress"]
-      end
-    end
-  end
+  NAT["NAT Gateway + EIP<br/>one public subnet"]
+  RDSStandby["AWS-managed standby<br/>not a read target"]
+  RDSReplica["Read replica<br/>not used by WordPress"]
+  Secrets["Secrets Manager<br/>regional, outside VPC"]
+  S3["S3 media bucket<br/>regional, outside VPC"]
+  CloudWatch["CloudWatch alarms<br/>regional, outside VPC"]
 
   Users -->|"request"| Internet
-  Internet -->|"HTTP :80"| IGW
-  IGW -->|"internet ingress"| ALB
-  ALB -->|"forwards requests"| ASG
+  Internet -->|"HTTP :80"| ALB
+  ALB -->|"forward"| ASG
   ASG -->|"MySQL :3306"| RDSPrimary
 
-  RDSPrimary -. "managed standby failover" .-> RDSStandby
-  RDSPrimary -. "asynchronous replication" .-> RDSReplica
-  ASG -. "runtime secret retrieval" .-> Secrets
-  ASG -->|"media access"| S3
-  CloudWatch -. "scaling signals" .-> ASG
-  ASG -->|"outbound egress"| NAT
-  NAT -->|"internet egress via IGW"| Internet
-
-  style AWS fill:transparent,stroke:#888888,stroke-width:1px
-  style Regional fill:transparent,stroke:#888888,stroke-width:1px
-  style VPC fill:transparent,stroke:#888888,stroke-width:1px
-  style Public fill:transparent,stroke:#888888,stroke-width:1px
-  style App fill:transparent,stroke:#888888,stroke-width:1px
-  style Data fill:transparent,stroke:#888888,stroke-width:1px
+  ASG -->|"egress"| NAT
+  RDSPrimary -. "standby" .-> RDSStandby
+  RDSPrimary -. "replication" .-> RDSReplica
+  ASG -. "secrets" .-> Secrets
+  ASG -->|"media"| S3
+  CloudWatch -. "scale" .-> ASG
 ```
 
 See [docs/architecture.md](docs/architecture.md) and [diagrams/architecture.mmd](diagrams/architecture.mmd) for the fuller architecture notes and Mermaid source.
