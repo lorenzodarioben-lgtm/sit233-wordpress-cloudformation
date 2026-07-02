@@ -21,62 +21,62 @@ The repository began as a university cloud-computing final project and has been 
 
 ```mermaid
 flowchart TB
-  Users["Users / Internet"]
+  Users["External users"]
+  Internet["Internet<br/>outside AWS account"]
 
-  subgraph AWS["AWS Region: us-east-1 expected by current defaults"]
-    subgraph VPC["CloudFormation VPC"]
-      IGW["Internet Gateway"]
+  subgraph AWS["AWS account / Region<br/>us-east-1 defaults"]
+    direction TB
 
-      subgraph PublicAZ1["Public subnet - AZ 1"]
-        ALB1["Application Load Balancer"]
-        NAT["NAT Gateway + Elastic IP"]
-      end
-
-      subgraph PublicAZ2["Public subnet - AZ 2"]
-        ALB2["Application Load Balancer"]
-      end
-
-      subgraph AppAZ1["Private application subnet - AZ 1"]
-        EC2A["EC2 Auto Scaling Group instance"]
-      end
-
-      subgraph AppAZ2["Private application subnet - AZ 2"]
-        EC2B["EC2 Auto Scaling Group capacity when selected"]
-      end
-
-      subgraph DBAZ1["Private database subnet - AZ 1"]
-        RDSPrimary["RDS MySQL primary"]
-      end
-
-      subgraph DBAZ2["Private database subnet - AZ 2"]
-        RDSStandby["AWS-managed Multi-AZ standby"]
-        RDSReplica["RDS MySQL read replica"]
-      end
+    subgraph Regional["Regional AWS services<br/>outside the VPC"]
+      direction LR
+      Secrets["Secrets Manager<br/>generated credentials"]
+      S3["S3 media bucket<br/>private + encrypted"]
+      CloudWatch["CloudWatch alarms<br/>ASG scaling"]
     end
 
-    Secrets["AWS Secrets Manager generated credentials"]
-    S3["Private S3 media bucket"]
-    CW["CloudWatch CPU alarms and ASG scaling policies"]
+    subgraph VPC["CloudFormation VPC"]
+      direction TB
+      IGW["Internet Gateway"]
+
+      subgraph Public["Public tier<br/>2 public subnets"]
+        direction LR
+        ALB["Application Load Balancer<br/>one logical ALB"]
+        NAT["NAT Gateway + EIP<br/>public subnet 1 only"]
+      end
+
+      subgraph App["Private app tier<br/>2 private subnets"]
+        ASG["EC2 Auto Scaling Group<br/>min 1 / desired 1 / max 3"]
+      end
+
+      subgraph Data["Private database tier<br/>DB subnet group"]
+        direction LR
+        RDSPrimary["RDS MySQL primary<br/>Multi-AZ enabled"]
+        RDSStandby["AWS-managed standby<br/>not a read target"]
+        RDSReplica["RDS read replica<br/>not used by WordPress"]
+      end
+    end
   end
 
-  Users --> IGW
-  IGW --> ALB1
-  IGW --> ALB2
-  ALB1 --> EC2A
-  ALB2 --> EC2B
-  EC2A --> RDSPrimary
-  EC2B --> RDSPrimary
+  Users -->|"request"| Internet
+  Internet -->|"HTTP :80"| IGW
+  IGW -->|"internet ingress"| ALB
+  ALB -->|"forwards requests"| ASG
+  ASG -->|"MySQL :3306"| RDSPrimary
+
   RDSPrimary -. "managed standby failover" .-> RDSStandby
-  RDSPrimary --> RDSReplica
-  EC2A --> Secrets
-  EC2B --> Secrets
-  EC2A --> S3
-  EC2B --> S3
-  EC2A --> NAT
-  EC2B --> NAT
-  NAT --> IGW
-  CW --> EC2A
-  CW --> EC2B
+  RDSPrimary -. "asynchronous replication" .-> RDSReplica
+  ASG -. "runtime secret retrieval" .-> Secrets
+  ASG -->|"media access"| S3
+  CloudWatch -. "scaling signals" .-> ASG
+  ASG -->|"outbound egress"| NAT
+  NAT -->|"internet egress via IGW"| Internet
+
+  style AWS fill:transparent,stroke:#888888,stroke-width:1px
+  style Regional fill:transparent,stroke:#888888,stroke-width:1px
+  style VPC fill:transparent,stroke:#888888,stroke-width:1px
+  style Public fill:transparent,stroke:#888888,stroke-width:1px
+  style App fill:transparent,stroke:#888888,stroke-width:1px
+  style Data fill:transparent,stroke:#888888,stroke-width:1px
 ```
 
 See [docs/architecture.md](docs/architecture.md) and [diagrams/architecture.mmd](diagrams/architecture.mmd) for the fuller architecture notes and Mermaid source.
